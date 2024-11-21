@@ -1,68 +1,62 @@
 /*
   IoT Cress Project
   -------------------------------------
-  
   Author: Christoph Himmler, Kamilo Knezevic, David Sommer, FH JOANNEUM, IMA
-  Last update: 18.11.2024
+  Created: 18.11.2024
+
+  Description: Smart monitoring and control system utilizing IoT 
+  technology to optimize environmental conditions for growing cress.
+  FH Joanneum IoT Project
+
+  Last update: 20.11.2024
 */
+#include "config.h"
 
-// # Libraries ##############################
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
 
-// # Variables ######################################################
+/******************************************************************************
+* Variables 
+******************************************************************************/
 /* -----------------------------------  
-  Setup Variables for WIFI and MQTT
+*  WiFiClient Setup
 -------------------------------------- */
-const char* SSID = "SSID";
-const char* PSK = "PSK";
-
-// MQTT Broker for external use
-const char* mqtt_server = "mqtt.medien-transparenz.at";
-const char* mqttClient = "sensor5";
-const char* mqttUser = "sensor5";
-const char* mqttPassword = "sensor5";
-const int mqtt_port = 8883;
-const int analogSoilSensor = A0;
-
 // WiFiClient espClient;
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
-unsigned long lastMsg = 0;
-#define MSG_BUFFER_SIZE (50)
+/* -----------------------------------  
+*  Message Instance
+-------------------------------------- */
+#define MSG_BUFFER_SIZE 512
 char msg[MSG_BUFFER_SIZE];
 
 /* -----------------------------------  
-  Time and Sample Data
+*  Time and Sample Data
 -------------------------------------- */
-unsigned long previousIntervalMillis = 0;                   // Last time sensor data was sent
-unsigned long previousSampleMillis = 0;                     // Last time sensor sample was taken
-#define SEND_INTERVAL 10000                                 // Send Interval
-#define SAMPLE_ARRAY_SIZES 20                               // Amount of Samples taken per interval
-#define SAMPLE_INTERVAL SEND_INTERVAL / SAMPLE_ARRAY_SIZES  // Interval for getting Sample data
+Interval_T sendInterval;
+Interval_T sampleInterval;
 
 /* -----------------------------------  
-  Soil moisture
+*  Soil moisture
 -------------------------------------- */
-static float soilMoistureArray[SAMPLE_ARRAY_SIZES];  // soil data array
-static int soilMoistureIdx = 0;
-#define DRY 780
-#define WET 350
+sensorValues_T soilMoisture;
 
 /* -----------------------------------  
-  Define Next Sensor here
+*  Soil Temerature
 -------------------------------------- */
-
-// # End of Variables ######################################################
-
-// # Setup ######################################################
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+sensorValues_T soilTemperature;
 
 /* -----------------------------------  
-  # Setup
---------------------------------------
-    Initialize
+*  Define Next Sensor here
+-------------------------------------- */
+
+/******************************************************************************
+* Setup 
+******************************************************************************/
+
+/* -----------------------------------  
+*  Initialize
 --------------------------------------*/
 void setup() {
   Serial.begin(115200);           // Baud rate microcontroller connection
@@ -80,14 +74,25 @@ void setup() {
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 
+  // Soil Temperature Sensor Init
+  sensors.begin();
+
+  // Struct Inits (sets values to 0)
+  memset((void*)&sendInterval, 0, sizeof(Interval_S));
+  memset((void*)&sampleInterval, 0, sizeof(Interval_S));
+  memset((void*)&soilMoisture, 0, sizeof(sensorValues_S));
+  memset((void*)&soilTemperature, 0, sizeof(sensorValues_S));
+  
+  // Struct data inits
+  sendInterval.interval = SEND_INTERVAL;
+  sampleInterval.interval = SEND_INTERVAL / SAMPLE_ARRAY_SIZES;
+
   Serial.println("Setup done");
   Serial.println("================");
 }
 
 /* -----------------------------------  
-  # Setup 
---------------------------------------
-    WiFi
+*  WiFi
 --------------------------------------*/
 void setup_wifi() {
   delay(10);
@@ -100,10 +105,6 @@ void setup_wifi() {
   Serial.println(mac);
   Serial.print("Connecting to ");
   Serial.println(SSID);
-
-  // DO NOT USE INSIDE FH JOANNEUM NETWORK
-  //Static IP address configuration
-  //WiFi.config(local_IP, gateway, subnet); //Sonst hier IP Adressen angeben
 
   //Connect to WiFi
   WiFi.begin(SSID, PSK);
@@ -131,21 +132,21 @@ void setup_wifi() {
 }
 
 /* -----------------------------------  
-  # Setup 
---------------------------------------
-    Analog Soil Moisture Calibration 
+*  Soil Moisture Calibration 
+*  -> Prints Soil value to console for calibration to define DRY and WET 
 --------------------------------------*/
-void checksoilMoistureCalibration() {
-  int analogSoilVal = analogRead(analogSoilSensor);
-  Serial.print(analogSoilVal);
+void checkSoilMoistureCalibration() {
+  int val = analogRead(analogSoilSensor);
+  Serial.print(val);
+  Serial.println(" - Function: checkSoilMoistureCalibration");
 }
 
-// # End of Setup ######################################################
+/******************************************************************************
+* Program 
+******************************************************************************/
 
 /* -----------------------------------  
-  # Program
---------------------------------------
-    Loop
+*  Loop
 --------------------------------------*/
 void loop() {
   if (!client.connected()) reconnect();  // Check and establish the connection
@@ -154,41 +155,41 @@ void loop() {
   DynamicJsonDocument doc(1024);
 
   // Calibration
-  // analogSoilMoistureCalibration();   // If soil mositure sensor is not yet set:
+  // checkSoilMoistureCalibration();   // If soil mositure sensor is not yet set:
 
-  // Interval for getting Samples
-  unsigned long currentSampleMillis = millis();
-  if (currentSampleMillis - previousSampleMillis >= SAMPLE_INTERVAL) {
-    previousSampleMillis = currentSampleMillis;
+  // Set current millis for time calc
+  unsigned long currentMillis = millis();
+
+  // Interval for getting samples
+  if (currentMillis - sampleInterval.previousMillis >= sampleInterval.interval) {
+    sampleInterval.previousMillis = currentMillis;
     logSoilMoistureSamples();
+    logSoilTemperatureSamples();
   }
 
   // Interval for sending data
-  unsigned long currentIntervalMillis = millis();
-  if (currentIntervalMillis - previousIntervalMillis >= SEND_INTERVAL) {
-    previousIntervalMillis = currentIntervalMillis;
+  if (currentMillis - sendInterval.previousMillis >= sendInterval.interval) {
+    sendInterval.previousMillis = currentMillis;
 
-    doc["soilMoistureMean"] = calcSoilMoistureMean();
+    doc["soilMoistureMean"] = calcMean(soilMoisture.values);
+    doc["soilTemperatureMean"] = calcMean(soilTemperature.values);
 
-    sendSensorData(doc);  // Takes JSON and sends Message
+    sendSensorData(doc);  // Takes JSON and sends message
     resetData();
   }
 }
 
 /* -----------------------------------  
-  # Program
---------------------------------------
-   Soil Moisture Data Logger
-   -> Reads and normalizes soil moisture values and sets in Array
+*  Soil Moisture Data Logger
+*  -> Reads and normalizes soil moisture values and sets in Array
 --------------------------------------*/
 void logSoilMoistureSamples() {
   int analogSoilVal = analogRead(analogSoilSensor);
-  Serial.println(analogSoilVal);
 
   // Handle unexpected values
   if (analogSoilVal < 10 || analogSoilVal > 950) {
-    Serial.println("Warning: Sensor might be disconnected or malfunctioning.");
-    return;  
+    Serial.println("Warning: Sensor might be disconnected or malfunctioning. - Function: logSoilMoistureSamples");
+    return;
   }
 
   // Map and normalize the sensor value
@@ -196,50 +197,65 @@ void logSoilMoistureSamples() {
   float normalizedSoilVal = mappedValue / 1000.0;
 
   // Store the normalized value in the array
-  soilMoistureArray[soilMoistureIdx] = normalizedSoilVal;
-  soilMoistureIdx++;
+  soilMoisture.values[soilMoisture.idx] = normalizedSoilVal;
+  soilMoisture.idx++;
 }
 
 /* -----------------------------------  
-  # Program
---------------------------------------
-  Calc Soil Mean of Array
+*  Soil Temperature Data Logger
+*  -> Reads values and sets in Array
 --------------------------------------*/
-float calcSoilMoistureMean() {
+void logSoilTemperatureSamples() {
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempCByIndex(0);
+  
+  if(tempC == DEVICE_DISCONNECTED_C) {
+    Serial.println("Error: Could not read temperature data - Function: logSoilTemperatureSamples");
+    return;
+  }
+
+  // Check if reading was successful
+  soilTemperature.values[soilTemperature.idx] = tempC;
+  soilTemperature.idx++;
+}
+
+/* -----------------------------------
+ *  Mean Calculator
+ *  -> Calculates mean from an array
+ --------------------------------------*/
+float calcMean(float values[]) {
   float sum = 0.0;
 
   for (int i = 0; i < SAMPLE_ARRAY_SIZES; i++) {
-    sum += soilMoistureArray[i];
+    sum += values[i];
   }
 
   return sum / SAMPLE_ARRAY_SIZES;
 }
 
 /* -----------------------------------  
-  # Program
---------------------------------------
-   Sends Collected Sensor Data to Broker
-   -> Serialize and publish JSON data
+*  Sends Collected Sensor Data to Broker
+*  -> Serialize and publish JSON data to broker
 --------------------------------------*/
 void sendSensorData(DynamicJsonDocument& doc) {
-  // Serialize the JSON to a string
-  char mqtt_message[128];
-  serializeJson(doc, mqtt_message);
+  serializeJson(doc, msg);                        // Serialize the JSON to a string
+  publishMessage("sensor/5/sandbox", msg, true);  // Publish the JSON string to the MQTT broker
 
-  // Publish the JSON string to the MQTT broker
-  publishMessage("sensor/5/sandbox", mqtt_message, true);
-
-  Serial.println("sendData");
+  Serial.println("---------- Send Sensor Data ---------- - Function: sendSensorData");
 }
 
 /* -----------------------------------  
-  # Program
---------------------------------------
-   Reset Data (Resets Index of Arrays)
+*  Reset Data 
+*  -> Resets index of arrays
 --------------------------------------*/
 void resetData() {
-  soilMoistureIdx = 0;
+  soilMoisture.idx = 0;
+  soilTemperature.idx = 0;
 }
+
+/******************************************************************************
+* MQTT and WIFI Logic from Lecture 
+******************************************************************************/
 
 /* -----------------------------------  
   # MQTT connect to broker
