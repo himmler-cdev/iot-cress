@@ -8,7 +8,7 @@
   for "iot_cress_project.ino".
   FH Joanneum IoT Project
 
-  Last update: 20.11.2024
+  Last update: 25.11.2024
 */
 
 #ifndef _CONFIG_H
@@ -23,6 +23,10 @@
 #include <ArduinoJson.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Wire.h>
+#include <U8g2lib.h>
+#include "Seeed_TMG3993.h"
+#include "Grove_Temperature_And_Humidity_Sensor.h"
 
 
 /******************************************************************************
@@ -41,7 +45,7 @@ const int mqtt_port = 8883;
 /******************************************************************************
 * Send and Sample Intervals
 ******************************************************************************/
-#define SEND_INTERVAL 10000    // Time interval before sending data to the broker
+#define SEND_INTERVAL 600000    // Time interval before sending data to the broker
 #define SAMPLE_ARRAY_SIZES 20  // Amount of samples taken per interval
 
 typedef struct Interval_S {
@@ -71,6 +75,35 @@ typedef struct sensorValues_S {
   int idx = 0;
   float values[SAMPLE_ARRAY_SIZES];  
 } sensorValues_T;
+
+/******************************************************************************
+* Temp and Humidity (DHT)
+******************************************************************************/
+#define DHTTYPE DHT20 
+#define DHTPIN 2
+
+
+/******************************************************************************
+* Button
+******************************************************************************/
+const int pushButtonPin = D5;
+
+
+/******************************************************************************
+* LEDs
+******************************************************************************/
+#define LED_BLINK_INTERVAL 5000 // Time in ms how long the LED should blink
+#define LED_BLINK_FREQUENCY 5 // Amount of how often the LED should blink (in the interval)
+const int onBoardLED = D0; //Build in LED
+const int externalLED = D7; 
+
+typedef struct LED_S {
+  unsigned long previousMillis;   
+  unsigned long interval;
+  unsigned long frequency;
+  unsigned long startMillis;
+  bool state;   
+} LED_T;
 
 
 #endif
