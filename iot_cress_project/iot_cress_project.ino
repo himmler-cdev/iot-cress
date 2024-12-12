@@ -37,28 +37,28 @@ Interval_T sampleInterval;
 /* -----------------------------------  
 *  Soil moisture
 -------------------------------------- */
-sensorValues_T soilMoisture;
+SensorValues_T soilMoisture;
 
 /* -----------------------------------  
 *  Soil Temerature
 -------------------------------------- */
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-sensorValues_T soilTemperature;
+SensorValues_T soilTemperature;
 
 /* -----------------------------------  
 *  Light/Brigthness 
 -------------------------------------- */
 TMG3993 tmg3993;
-sensorValues_T light;  // Lux
-sensorValues_T cct;    // Color Temperature
+SensorValues_T light;  // Lux
+SensorValues_T cct;    // Color Temperature
 
 /* -----------------------------------  
 *  Temp and Humidity (DHT)
 -------------------------------------- */
 DHT dht(DHTTYPE);
-sensorValues_T airHumidity;
-sensorValues_T airTemperature;
+SensorValues_T airHumidity;
+SensorValues_T airTemperature;
 
 /* -----------------------------------  
 *  Button
@@ -80,6 +80,11 @@ LED_T led;
 *  OLED
 -------------------------------------- */
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
+
+/* -----------------------------------  
+*  Sleep Mode
+-------------------------------------- */
+SleepMode_T sleepMode;
 
 /******************************************************************************
 * Button Interrupt 
@@ -164,6 +169,9 @@ void setup() {
   // LEDs
   pinMode(onBoardLED, OUTPUT);
   pinMode(externalLED, OUTPUT);
+  pinMode(colorBlueLED, OUTPUT);
+  pinMode(colorGreenLED, OUTPUT);
+  pinMode(colorRedLED, OUTPUT);
 
   digitalWrite(onBoardLED, HIGH);
   digitalWrite(externalLED, LOW);
@@ -182,12 +190,13 @@ void setup() {
   memset((void*)&sendInterval, 0, sizeof(Interval_S));
   memset((void*)&sampleInterval, 0, sizeof(Interval_S));
   memset((void*)&led, 0, sizeof(LED_T));
-  memset((void*)&soilMoisture, 0, sizeof(sensorValues_S));
-  memset((void*)&soilTemperature, 0, sizeof(sensorValues_S));
-  memset((void*)&light, 0, sizeof(sensorValues_S));
-  memset((void*)&cct, 0, sizeof(sensorValues_S));
-  memset((void*)&airHumidity, 0, sizeof(sensorValues_S));
-  memset((void*)&airTemperature, 0, sizeof(sensorValues_S));
+  memset((void*)&soilMoisture, 0, sizeof(SensorValues_S));
+  memset((void*)&soilTemperature, 0, sizeof(SensorValues_S));
+  memset((void*)&light, 0, sizeof(SensorValues_S));
+  memset((void*)&cct, 0, sizeof(SensorValues_S));
+  memset((void*)&airHumidity, 0, sizeof(SensorValues_S));
+  memset((void*)&airTemperature, 0, sizeof(SensorValues_S));
+  memset((void*)&sleepMode, 0, sizeof(SleepMode_S));
 
   // Struct data inits
   sendInterval.interval = SEND_INTERVAL;
@@ -195,6 +204,7 @@ void setup() {
   led.interval = LED_BLINK_INTERVAL;
   led.frequency = LED_BLINK_INTERVAL / (LED_BLINK_FREQUENCY * 2);
   led.state = LOW;
+  sleepMode.isSleepMode = false;
 
   Serial.println("Setup done");
   Serial.println("================");
@@ -287,12 +297,12 @@ void loop() {
   if (currentMillis - sendInterval.previousMillis >= sendInterval.interval) {
     sendInterval.previousMillis = currentMillis;
 
-    doc["soilMoistureMean"] = calcMean(soilMoisture.values);
-    doc["soilTemperatureMean"] = calcMean(soilTemperature.values);
-    doc["brigthnessMean"] = calcMean(light.values);
-    doc["colorTemperatureMean"] = calcMean(cct.values);
-    doc["airHumidityMean"] = calcMean(airHumidity.values);
-    doc["airTemperatureMean"] = calcMean(airTemperature.values);
+    doc["soilMoisture"] = calcMean(soilMoisture.values);
+    doc["soilTemperature"] = calcMean(soilTemperature.values);
+    doc["lightVisible"] = calcMean(light.values);
+    doc["colorTemperature"] = calcMean(cct.values);
+    doc["airHumidity"] = calcMean(airHumidity.values);
+    doc["airTemperature"] = calcMean(airTemperature.values);
     doc["upTimeSec"] = (currentMillis / 1000);
 
     sendSensorData(doc);  // Takes JSON and sends message
@@ -409,8 +419,8 @@ float calcMean(float values[]) {
 *  -> Serialize and publish JSON data to broker
 --------------------------------------*/
 void sendSensorData(DynamicJsonDocument& doc) {
-  serializeJson(doc, msg);                     // Serialize the JSON to a string
-  publishMessage("sensor/5/test", msg, true);  // Publish the JSON string to the MQTT broker
+  serializeJson(doc, msg);                                 // Serialize the JSON to a string
+  publishMessage("sensor/5/environment", msg, true);  // Publish the JSON string to the MQTT broker
 
   Serial.println("---------- Send Sensor Data ---------- - Function: sendSensorData");
 }
@@ -423,7 +433,7 @@ void sendWatering(int btnCnt) {
   DynamicJsonDocument doc(1024);
   doc["wateringCnt"] = btnCnt;
   serializeJson(doc, msg);                            // Serialize the JSON to a string
-  publishMessage("sensor/5/test/urgent", msg, true);  // Publish the JSON string to the MQTT broker
+  publishMessage("sensor/5/urgent", msg, true);  // Publish the JSON string to the MQTT broker
 
   Serial.println("---------- Send Watering ---------- - Function: sendWatering");
 }
@@ -451,19 +461,20 @@ void printDocToOLED(DynamicJsonDocument& doc, int btnCnt) {
   u8g2.clearBuffer();
 
   // First line: SM (Soil Moisture as percentage) and ST (Soil Temperature in °C)
-  char firstLine[30];                                                     // Buffer for the line
-  float soilMoisturePercent = doc["soilMoistureMean"].as<float>() * 100;  // Convert to percentage
-  sprintf(firstLine, "SM:%.2f%% | ST:%.2fC", soilMoisturePercent, doc["soilTemperatureMean"].as<float>());
+  char firstLine[30];                                                 // Buffer for the line
+  float soilMoisturePercent = doc["soilMoisture"].as<float>() * 100;  // Convert to percentage
+  sprintf(firstLine, "SM:%.2f%% | ST:%.2fC", soilMoisturePercent, doc["soilTemperature"].as<float>());
   u8g2.drawStr(0, 10, firstLine);
 
   // Second line: BR (Brightness) and CT (Color Temperature)
   char secondLine[30];
-  sprintf(secondLine, "BR:%.2f | CT:%f", doc["brigthnessMean"].as<float>(), doc["colorTemperatureMean"].as<float>());
+  const char* colorTemperature = formatWithSI(doc["colorTemperature"].as<float>());
+  sprintf(secondLine, "BR:%.2f | CT:%s", doc["lightVisible"].as<float>(), colorTemperature);
   u8g2.drawStr(0, 22, secondLine);
 
   // Third line: AH (Air Humidity as percentage) and AT (Air Temperature in °C)
   char thirdLine[30];
-  sprintf(thirdLine, "AH:%.2f%% | AT:%.2fC", doc["airHumidityMean"].as<float>(), doc["airTemperatureMean"].as<float>());
+  sprintf(thirdLine, "AH:%.2f%% | AT:%.2fC", doc["airHumidity"].as<float>(), doc["airTemperature"].as<float>());
   u8g2.drawStr(0, 34, thirdLine);
 
   // Fourth Line: Watering Button Count
@@ -483,6 +494,39 @@ void printDocToOLED(DynamicJsonDocument& doc, int btnCnt) {
 
   // Send the buffer to the OLED
   u8g2.sendBuffer();
+}
+
+/* -----------------------------------  
+*  Format Number/Value into SI
+*  -> Turns a value into corresponding SI value (from Kilo to Tera)
+--------------------------------------*/
+const char* formatWithSI(float value) {
+  if (value >= 1e12) {
+    // Tera (T)
+    static char formatted[10];
+    sprintf(formatted, "%.2fT", value / 1e12);
+    return formatted;
+  } else if (value >= 1e9) {
+    // Giga (G)
+    static char formatted[10];
+    sprintf(formatted, "%.2fG", value / 1e9);
+    return formatted;
+  } else if (value >= 1e6) {
+    // Mega (M)
+    static char formatted[10];
+    sprintf(formatted, "%.2fM", value / 1e6);
+    return formatted;
+  } else if (value >= 1e3) {
+    // Kilo (K)
+    static char formatted[10];
+    sprintf(formatted, "%.2fK", value / 1e3);
+    return formatted;
+  } else {
+    // Normal Number
+    static char formatted[10];
+    sprintf(formatted, "%.2f", value);
+    return formatted;
+  }
 }
 
 /* -----------------------------------  
@@ -533,7 +577,7 @@ void reconnect() {
     if (client.connect(mqttClient, mqttUser, mqttPassword)) {
       Serial.println("connected");
 
-      client.subscribe("sensor/5/sandbox/feedback");  // subscribe the topics here
+      client.subscribe("sensor/5/feedback");  // subscribe the topics here
 
     } else {
       Serial.print("failed, rc=");
@@ -550,9 +594,95 @@ void reconnect() {
   Receiving messages from the broker
 --------------------------------------*/
 void callback(char* topic, byte* payload, unsigned int length) {
-  (void)topic;
-  (void)payload;
-  (void)length;
+  if (length > 0) {
+    char jsonCallback[length + 1];          // Create a char array for the incoming JSON
+    memcpy(jsonCallback, payload, length);  // Copy payload to the array
+    jsonCallback[length] = '\0';            // Null-terminate the string
+
+    Serial.println("Message arrived [" + String(topic) + "]: " + String(jsonCallback));
+
+    // JSON deserialization
+    StaticJsonDocument<200> docFeedback;  // Adjust size based on expected payload
+    DeserializationError error = deserializeJson(docFeedback, jsonCallback);
+
+    if (error) {
+      Serial.print("deserializeJson() failed: ");
+      Serial.println(error.f_str());
+      return;  // Exit if JSON parsing fails
+    }
+
+    // Check if colorFeedback exists in the JSON
+    if (docFeedback.containsKey("colorFeedback")) {
+      JsonArray colorFeedback = docFeedback["colorFeedback"];
+
+      int rgbColors[3];
+      for (int i = 0; i < 3; i++) {
+        // Check if the value is a valid number (int)
+        int colorValue = colorFeedback[i].as<int>();
+
+        // If the value is outside the range or invalid, set it to 0
+        if (colorValue < 0 || colorValue > 255) {
+          rgbColors[i] = 0;
+        } else {
+          rgbColors[i] = colorValue;
+        }
+      }
+
+      setColorLED(rgbColors);  // Set the LED color
+    }
+
+    // Check if sleep mode is toggled
+    if (docFeedback.containsKey("setSleepMode")) {
+      // Check if the value is explicitly boolean true
+      if (docFeedback["setSleepMode"].as<bool>() == true) {
+        sleepMode.isSleepMode = true;
+      } else {
+        sleepMode.isSleepMode = false;
+      }
+      
+      setSleepMode();
+    }
+  }
+}
+
+/* -----------------------------------
+ *  Set LED Colors
+ *  -> Helper function to set RGB values to LEDs
+--------------------------------------*/
+void setLEDColors(int red, int green, int blue) {
+  analogWrite(colorRedLED, red);
+  analogWrite(colorGreenLED, green);
+  analogWrite(colorBlueLED, blue);
+}
+
+/* -----------------------------------
+ *  Set Color LED based on Feedback
+ *  -> Sets RGB color based on feedback value
+--------------------------------------*/
+void setColorLED(int rgbColors[]) {
+  // Save the current color to sleepMode
+  for (int i = 0; i < 3; i++) {
+    sleepMode.lastLEDColors[i] = rgbColors[i];
+  }
+
+  // Update the LEDs only if not in sleep mode
+  if (!sleepMode.isSleepMode) {
+    setLEDColors(sleepMode.lastLEDColors[0], sleepMode.lastLEDColors[1], sleepMode.lastLEDColors[2]);
+  }
+}
+
+/* -----------------------------------
+ *  Set Sleep Mode
+ *  -> Turns on/off the LEDs based on sleepMode state
+--------------------------------------*/
+void setSleepMode() {
+  if (sleepMode.isSleepMode) {
+    setLEDColors(0, 0, 0);
+    u8g2.setPowerSave(true);  // Turn off the OLED
+  } else {
+    setLEDColors(sleepMode.lastLEDColors[0], sleepMode.lastLEDColors[1], sleepMode.lastLEDColors[2]);
+    u8g2.setPowerSave(false);  // Turn on the OLED
+  }
 }
 
 /* -----------------------------------  
@@ -562,5 +692,5 @@ void callback(char* topic, byte* payload, unsigned int length) {
 --------------------------------------*/
 void publishMessage(const char* topic, String payload, boolean retained) {
   if (client.publish(topic, payload.c_str(), true))
-    Serial.println("Message published [" + String(topic) + "]: " + payload);
+    Serial.println("Message published [" + String(topic) + "]: " + payload + " - Function: logSoilMoistureSamples");
 }

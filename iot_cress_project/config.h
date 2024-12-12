@@ -71,10 +71,10 @@ const int analogSoilSensor = A0;
 /******************************************************************************
 * Sensor Array Type
 ******************************************************************************/
-typedef struct sensorValues_S {
+typedef struct SensorValues_S {
   int idx = 0;
   float values[SAMPLE_ARRAY_SIZES];  
-} sensorValues_T;
+} SensorValues_T;
 
 /******************************************************************************
 * Temp and Humidity (DHT)
@@ -104,6 +104,22 @@ typedef struct LED_S {
   unsigned long startMillis;
   bool state;   
 } LED_T;
+
+
+/******************************************************************************
+* Color LED
+******************************************************************************/
+const int colorRedLED = D6; // D6 because D10 caused issues/failure
+const int colorBlueLED = D8;
+const int colorGreenLED = D9;
+
+/******************************************************************************
+* Sleep Mode
+******************************************************************************/
+typedef struct SleepMode_S {
+  bool isSleepMode;
+  int lastLEDColors[3]; 
+} SleepMode_T;
 
 
 #endif
