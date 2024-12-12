@@ -297,7 +297,7 @@ void loop() {
   if (currentMillis - sendInterval.previousMillis >= sendInterval.interval) {
     sendInterval.previousMillis = currentMillis;
 
-    doc["soilMoisture"] = calcMean(soilMoisture.values);
+    doc["soilMoisture"] = (calcMean(soilMoisture.values) * 100);
     doc["soilTemperature"] = calcMean(soilTemperature.values);
     doc["lightVisible"] = calcMean(light.values);
     doc["colorTemperature"] = calcMean(cct.values);
