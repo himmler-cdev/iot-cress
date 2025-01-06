@@ -462,8 +462,7 @@ void printDocToOLED(DynamicJsonDocument& doc, int btnCnt) {
 
   // First line: SM (Soil Moisture as percentage) and ST (Soil Temperature in °C)
   char firstLine[30];                                                 // Buffer for the line
-  float soilMoisturePercent = doc["soilMoisture"].as<float>() * 100;  // Convert to percentage
-  sprintf(firstLine, "SM:%.2f%% | ST:%.2fC", soilMoisturePercent, doc["soilTemperature"].as<float>());
+  sprintf(firstLine, "SM:%.2f%% | ST:%.2fC", doc["soilMoisture"].as<float>(), doc["soilTemperature"].as<float>());
   u8g2.drawStr(0, 10, firstLine);
 
   // Second line: BR (Brightness) and CT (Color Temperature)
@@ -692,5 +691,5 @@ void setSleepMode() {
 --------------------------------------*/
 void publishMessage(const char* topic, String payload, boolean retained) {
   if (client.publish(topic, payload.c_str(), true))
-    Serial.println("Message published [" + String(topic) + "]: " + payload + " - Function: logSoilMoistureSamples");
+    Serial.println("Message published [" + String(topic) + "]: " + payload + " - Function: publishMessage");
 }
