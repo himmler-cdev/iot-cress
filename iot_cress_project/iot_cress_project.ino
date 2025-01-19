@@ -8,7 +8,7 @@
   technology to optimize environmental conditions for growing cress.
   FH Joanneum IoT Project
 
-  Last update: 25.11.2024
+  Last update: 19.01.2025
 */
 #include "config.h"
 
@@ -269,6 +269,7 @@ void loop() {
   client.loop();                         // Maintain connection and check for incomming messsages
 
   DynamicJsonDocument doc(1024);
+  DynamicJsonDocument oledDoc(1024);
 
   // Calibration
   // checkSoilMoistureCalibration();   // If soil mositure sensor is not yet set:
@@ -281,7 +282,7 @@ void loop() {
     wateringLoopCnt = wateringCnt;
     sendWatering(wateringCnt);
     led.startMillis = millis();  // Comment this out if you do not want blinking of the leds when clicking the button
-    printWateringMsg(wateringCnt);
+    //printWateringMsg(wateringCnt);
   }
 
   // Interval for getting samples
@@ -292,6 +293,10 @@ void loop() {
     logLightSamples();
     logDHTSamples();  // Air - Temp and Humidity
   }
+
+  // Populate and print to OLED
+  populateOledDoc(oledDoc, wateringCnt);
+  printDocToOLED(oledDoc, wateringCnt);
 
   // Interval for sending data
   if (currentMillis - sendInterval.previousMillis >= sendInterval.interval) {
@@ -307,7 +312,6 @@ void loop() {
 
     sendSensorData(doc);  // Takes JSON and sends message
     //led.startMillis = millis(); // Comment this out if you do not want blinking of the leds when sending
-    printDocToOLED(doc, wateringCnt);
     resetData();
   }
 
@@ -321,21 +325,60 @@ void loop() {
 }
 
 /* -----------------------------------  
-*  Soil Moisture Data Logger
-*  -> Reads and normalizes soil moisture values and sets in Array
+*  Actual Values for OLED
+*  -> Reads actual data and fills it into the oledDoc
 --------------------------------------*/
-void logSoilMoistureSamples() {
+void populateOledDoc(DynamicJsonDocument &oledDoc, int wateringCnt) {
+  // Clear the document before populating
+  oledDoc.clear();
+  int32_t luxVal;
+  int32_t cctVal;
+  float airHumidity;
+  float airTemperature;
+
+  getLightData(luxVal, cctVal);
+  getDHTData(airHumidity, airTemperature);
+
+  // Add data to the oledDoc
+  oledDoc["soilMoisture"] = (getNormalizedSoilMoisture() * 100);
+  oledDoc["soilTemperature"] = getSoilTemperature();
+  oledDoc["lightVisible"] = luxVal;
+  oledDoc["colorTemperature"] = cctVal;
+  oledDoc["airHumidity"] = airHumidity;
+  oledDoc["airTemperature"] = airTemperature;
+  oledDoc["wateringCount"] = wateringCnt;
+  oledDoc["upTimeSec"] = (millis() / 1000);
+}
+
+/* -----------------------------------  
+*  Get Normalized Soil Moisture Value
+*  -> Reads the analog soil sensor value, handles errors, and returns a normalized value
+--------------------------------------*/
+float getNormalizedSoilMoisture() {
   int analogSoilVal = analogRead(analogSoilSensor);
 
   // Handle unexpected values
   if (analogSoilVal < 10 || analogSoilVal > 950) {
-    Serial.println("Warning: Sensor might be disconnected or malfunctioning. - Function: logSoilMoistureSamples");
-    return;
+    Serial.println("Warning: Sensor might be disconnected or malfunctioning. - Function: getNormalizedSoilMoisture");
+    return -1.0; // Return an invalid value to indicate an error
   }
 
   // Map and normalize the sensor value
   int mappedValue = map(analogSoilVal, WET, DRY, 1000, 0);
-  float normalizedSoilVal = mappedValue / 1000.0;
+  return mappedValue / 1000.0; // Return normalized value
+}
+
+/* -----------------------------------  
+*  Soil Moisture Data Logger
+*  -> Stores the normalized soil moisture value in the array
+--------------------------------------*/
+void logSoilMoistureSamples() {
+  float normalizedSoilVal = getNormalizedSoilMoisture();
+
+  // Check for invalid normalized value
+  if (normalizedSoilVal < 0) {
+    return; // Exit if sensor is malfunctioning
+  }
 
   // Store the normalized value in the array
   soilMoisture.values[soilMoisture.idx] = normalizedSoilVal;
@@ -343,57 +386,113 @@ void logSoilMoistureSamples() {
 }
 
 /* -----------------------------------  
-*  Soil Temperature Data Logger
-*  -> Reads values and sets in Array
+*  Get Soil Temperature
+*  -> Reads the soil temperature and handles errors
 --------------------------------------*/
-void logSoilTemperatureSamples() {
+float getSoilTemperature() {
   sensors.requestTemperatures();
   float tempC = sensors.getTempCByIndex(0);
 
+  // Handle sensor disconnection or error
   if (tempC == DEVICE_DISCONNECTED_C) {
-    Serial.println("Error: Could not read temperature data - Function: logSoilTemperatureSamples");
-    return;
+    Serial.println("Error: Could not read temperature data - Function: getSoilTemperature");
+    return -1.0; // Return an invalid value to indicate an error
   }
 
-  // Check if reading was successful
+  return tempC; // Return valid temperature
+}
+
+/* -----------------------------------  
+*  Soil Temperature Data Logger
+*  -> Stores the soil temperature value in the array
+--------------------------------------*/
+void logSoilTemperatureSamples() {
+  float tempC = getSoilTemperature();
+
+  // Check if the temperature reading is valid
+  if (tempC < 0) {
+    return; // Exit if sensor is disconnected or malfunctioning
+  }
+
+  // Store the temperature value in the array
   soilTemperature.values[soilTemperature.idx] = tempC;
   soilTemperature.idx++;
 }
 
 /* -----------------------------------  
-*  Light Data Logger
-*  -> Reads values and sets in Array
+*  Get Light Data
+*  -> Reads light and color temperature values
 --------------------------------------*/
-void logLightSamples() {
+bool getLightData(int32_t &luxVal, int32_t &cctVal) {
   if (tmg3993.getSTATUS() & STATUS_AVALID) {
     uint16_t r, g, b, c;
-    int32_t luxVal;
-    int32_t cctVal;
+
+    // Retrieve raw RGB and clear light data
     tmg3993.getRGBCRaw(&r, &g, &b, &c);
+
+    // Calculate lux and CCT values
     luxVal = tmg3993.getLux(r, g, b, c);
     cctVal = tmg3993.getCCT(r, g, b, c);
 
-    light.values[light.idx] = luxVal;
-    cct.values[cct.idx] = cctVal;
-    light.idx++;
-    cct.idx++;
-
+    // Clear ALS interrupts
     tmg3993.clearALSInterrupts();
+    return true; // Data successfully retrieved
   } else {
-    Serial.println("Error: Could not read light data - Function: logLightSamples");
+    Serial.println("Error: Could not read light data - Function: getLightData");
+    return false; // Failed to retrieve data
   }
 }
 
 /* -----------------------------------  
+*  Light Data Logger
+*  -> Stores light and CCT values in arrays
+--------------------------------------*/
+void logLightSamples() {
+  int32_t luxVal;
+  int32_t cctVal;
+
+  // Get light and CCT data
+  if (getLightData(luxVal, cctVal)) {
+    // Store the data in the arrays
+    light.values[light.idx] = luxVal;
+    cct.values[cct.idx] = cctVal;
+    light.idx++;
+    cct.idx++;
+  }
+}
+
+/* -----------------------------------  
+*  Get DHT Data
+*  -> Reads air temperature and humidity values
+--------------------------------------*/
+bool getDHTData(float &humidity, float &temperature) {
+  float hum_temp_val[2] = {0};
+
+  // Attempt to read temperature and humidity
+  if (dht.readTempAndHumidity(hum_temp_val)) {
+    Serial.println("Error: Could not read DHT data - Function: getDHTData");
+    return false; // Failed to retrieve data
+  }
+
+  // Assign values to the output variables
+  humidity = hum_temp_val[0];
+  temperature = hum_temp_val[1];
+  return true; // Data successfully retrieved
+}
+
+/* -----------------------------------  
 *  DHT Data Logger
-*  -> Reads air temperature and air humidity values and sets in Array
+*  -> Stores air temperature and humidity values in arrays
 --------------------------------------*/
 void logDHTSamples() {
-  float hum_temp_val[20] = { 0 };
+  float humidity;
+  float temperature;
 
-  if (!dht.readTempAndHumidity(hum_temp_val)) {
-    airHumidity.values[airHumidity.idx] = hum_temp_val[0];
-    airTemperature.values[airTemperature.idx] = hum_temp_val[1];
+  // Get humidity and temperature data
+  if (getDHTData(humidity, temperature)) {
+    // Store the data in the arrays
+    airHumidity.values[airHumidity.idx] = humidity;
+    airTemperature.values[airTemperature.idx] = temperature;
 
     airHumidity.idx++;
     airTemperature.idx++;
@@ -468,7 +567,7 @@ void printDocToOLED(DynamicJsonDocument& doc, int btnCnt) {
   // Second line: BR (Brightness) and CT (Color Temperature)
   char secondLine[30];
   const char* colorTemperature = formatWithSI(doc["colorTemperature"].as<float>());
-  sprintf(secondLine, "BR:%.2f | CT:%s", doc["lightVisible"].as<float>(), colorTemperature);
+  sprintf(secondLine, "BR:%.2fl | CT:%s", doc["lightVisible"].as<float>(), colorTemperature);
   u8g2.drawStr(0, 22, secondLine);
 
   // Third line: AH (Air Humidity as percentage) and AT (Air Temperature in °C)
